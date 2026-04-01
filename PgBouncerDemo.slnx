@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/PgBouncerDemo/PgBouncerDemo.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/PgBouncerDemo.Tests/PgBouncerDemo.Tests.csproj" Id="5415c1a4-9317-43f1-8bec-d3bcface0cb9" />
+  </Folder>
+</Solution>
