@@ -10,7 +10,7 @@ class Program
 
         // 1. DIRECT POSTGRESQL CONNECTION (Port: 15432)
         // NoResetOnClose is not needed here.
-        string postgresConnectionString = "Host=localhost;Port=15432;Database=falcon;Username=postgres;Password=toorqwe1234r;Pooling=True;Minimum Pool Size=10;Maximum Pool Size=200;Timeout=30;";
+        string postgresConnectionString = "Host=localhost;Port=15432;Database=falcon;Username=postgres;Password=toorqwe1234r;Pooling=True;Minimum Pool Size=10;Maximum Pool Size=200;Timeout=30;No Reset On Close=true;"; // when No Reset on Close: sorry, too many clients already
 
         // 2. PGBOUNCER CONNECTION (Port: 6432)
         // NoResetOnClose=true is REQUIRED for PgBouncer transaction mode.
