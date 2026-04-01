@@ -1,72 +1,99 @@
-﻿using System.Diagnostics;
-using Npgsql;
+﻿using Npgsql;
+using System.Diagnostics;
 
-// Connection string with PgBouncer config
-string connectionString = "Host=localhost;Port=6432;Database=falcon;Username=postgres;Password=toorqwe1234r;Pooling=True;Minimum Pool Size=10;Maximum Pool Size=200;Timeout=30;No Reset On Close=true;";
-
-int workerCount = 500;       // Number of concurrent background workers
-int queriesPerWorker = 2000; // Number of monitors checked by each worker
-
-Console.WriteLine("=== Starting Stress Test for Falcon Monitor Check Simulation ===");
-Console.WriteLine($"Active Workers: {workerCount}, Total Monitor Checks: {workerCount * queriesPerWorker}");
-
-int successCount = 0;
-int failCount = 0;
-
-var stopwatch = Stopwatch.StartNew();
-
-// Modern, high-performance connection pooling via NpgsqlDataSource
-await using var dataSource = NpgsqlDataSource.Create(connectionString);
-
-// Launch parallel workers to simulate concurrent monitor checks
-await Parallel.ForEachAsync(
-    Enumerable.Range(1, workerCount),
-    new ParallelOptions { MaxDegreeOfParallelism = workerCount },
-    async (workerId, ct) =>
+class Program
+{
+    static async Task Main()
     {
-        // Thread-safe random generator to simulate different monitor IDs and latencies
-        var rnd = new Random(Guid.NewGuid().GetHashCode());
+        int workerCount = 500;       // Number of concurrent background workers
+        int queriesPerWorker = 2000; // Number of monitors checked by each worker
 
-        for (int i = 0; i < queriesPerWorker; i++)
-        {
-            try
+        // 1. DIRECT POSTGRESQL CONNECTION (Port: 15432)
+        // NoResetOnClose is not needed here.
+        string postgresConnectionString = "Host=localhost;Port=15432;Database=falcon;Username=postgres;Password=toorqwe1234r;Pooling=True;Minimum Pool Size=10;Maximum Pool Size=200;Timeout=30;";
+
+        // 2. PGBOUNCER CONNECTION (Port: 6432)
+        // NoResetOnClose=true is REQUIRED for PgBouncer transaction mode.
+        string pgbouncerConnectionString = "Host=localhost;Port=6432;Database=falcon;Username=postgres;Password=toorqwe1234r;Pooling=True;Minimum Pool Size=10;Maximum Pool Size=200;Timeout=30;No Reset On Close=true;";
+
+        Console.WriteLine("======================================================");
+        Console.WriteLine("   FALCON STRESS TEST: Direct Postgres vs PgBouncer   ");
+        Console.WriteLine("======================================================\n");
+
+        // --- ROUND 1: Direct PostgreSQL ---
+        //await RunStressTest("1. DIRECT POSTGRESQL", postgresConnectionString, workerCount, queriesPerWorker);
+
+        // Give the database a 5-second cooldown to close unused connections
+        Console.WriteLine("\n[System] Cooling down for 5 seconds before the next test...\n");
+        await Task.Delay(5000);
+
+        // --- ROUND 2: PgBouncer ---
+        await RunStressTest("2. PGBOUNCER", pgbouncerConnectionString, workerCount, queriesPerWorker);
+
+        Console.WriteLine("\n[System] All tests completed successfully.");
+    }
+
+    /// <summary>
+    /// Runs the stress test with the given configuration.
+    /// </summary>
+    static async Task RunStressTest(string testName, string connectionString, int workerCount, int queriesPerWorker)
+    {
+        Console.WriteLine($"--- STARTING TEST: {testName} ---");
+        Console.WriteLine($"Active Workers: {workerCount}, Total Monitor Checks: {workerCount * queriesPerWorker}");
+
+        int successCount = 0;
+        int failCount = 0;
+
+        var stopwatch = Stopwatch.StartNew();
+
+        // Create a dedicated connection pool for this test
+        await using var dataSource = NpgsqlDataSource.Create(connectionString);
+
+        await Parallel.ForEachAsync(
+            Enumerable.Range(1, workerCount),
+            new ParallelOptions { MaxDegreeOfParallelism = workerCount },
+            async (workerId, ct) =>
             {
-                // 1. Lease a connection from PgBouncer pool
-                await using var conn = await dataSource.OpenConnectionAsync(ct);
+                // Thread-safe random generator to simulate different data points
+                var rnd = new Random(Guid.NewGuid().GetHashCode());
 
-                // =========================================================================
-                // FALCON SCENARIO: Simulating a monitor status UPDATE/INSERT
-                // =========================================================================
-                // Buni loyihangizdagi haqiqiy SQL so'rovga almashtirishingiz tavsiya etiladi!
-                string falconQuery = @"
-                    SELECT 1; -- HOZIRCHA ODDIY SELECT (Test uchun)
-                ";
+                for (int i = 0; i < queriesPerWorker; i++)
+                {
+                    try
+                    {
+                        // Lease connection from the pool
+                        await using var conn = await dataSource.OpenConnectionAsync(ct);
 
-                await using var cmd = new NpgsqlCommand(falconQuery, conn);
+                        // Lightweight dummy query (Replace with UPDATE/INSERT for real test)
+                        string falconQuery = "SELECT 1;";
+                        await using var cmd = new NpgsqlCommand(falconQuery, conn);
 
-                // cmd.Parameters.AddWithValue("monitorId", rnd.Next(1, 1000000));
-                // cmd.Parameters.AddWithValue("status", rnd.Next(0, 100) > 5 ? "UP" : "DOWN"); // 95% UP, 5% DOWN
-                // cmd.Parameters.AddWithValue("latency", rnd.Next(10, 1500)); // 10ms dan 1.5s gacha javob vaqti
+                        // Execute the write operation
+                        await cmd.ExecuteNonQueryAsync(ct);
 
-                // 2. Execute the monitor check write operation
-                await cmd.ExecuteNonQueryAsync(ct);
+                        Interlocked.Increment(ref successCount);
+                    }
+                    catch (Exception ex)
+                    {
+                        Interlocked.Increment(ref failCount);
+                        // Log only the first 3 errors to prevent console spam
+                        if (failCount <= 3)
+                        {
+                            Console.WriteLine($"[Error - {testName}] Worker {workerId}: {ex.Message}");
+                        }
+                    }
+                }
+            });
 
-                Interlocked.Increment(ref successCount);
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref failCount);
-                // Log only the first few errors to avoid console spam during extreme load
-                if (failCount <= 5)
-                    Console.WriteLine($"Error (Worker {workerId}): {ex.Message}");
-            }
-        }
-    });
+        stopwatch.Stop();
 
-stopwatch.Stop();
+        Console.WriteLine($"\n=== RESULTS: {testName} ===");
+        Console.WriteLine($"Elapsed Time:      {stopwatch.ElapsedMilliseconds} ms");
+        Console.WriteLine($"Successful Checks: {successCount}");
+        Console.WriteLine($"Failed Checks:     {failCount}");
 
-Console.WriteLine("\n=== Stress Test Results ===");
-Console.WriteLine($"Elapsed Time: {stopwatch.ElapsedMilliseconds} ms");
-Console.WriteLine($"Successful Checks: {successCount}");
-Console.WriteLine($"Failed Checks: {failCount}");
-Console.WriteLine($"Throughput: {Math.Round((successCount + failCount) / stopwatch.Elapsed.TotalSeconds)} checks/sec");
+        double totalSeconds = stopwatch.Elapsed.TotalSeconds;
+        double throughput = (successCount + failCount) / (totalSeconds > 0 ? totalSeconds : 1);
+        Console.WriteLine($"Throughput:        {Math.Round(throughput)} checks/sec\n");
+    }
+}
